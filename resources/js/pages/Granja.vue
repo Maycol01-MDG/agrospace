@@ -1,325 +1,705 @@
 <script setup lang="ts">
 import { Head, Link, router } from '@inertiajs/vue3';
 import { Home, LogOut, User } from 'lucide-vue-next';
-import * as THREE from 'three';
-import { onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
-// Función para cerrar sesión
+type CropKey = 'papa' | 'alfalfa' | 'maiz' | 'zanahoria';
+type SeasonName = 'Primavera' | 'Verano' | 'Otoño' | 'Invierno';
+type FertilizerType = 'natural' | 'chemical';
+
+type Tool =
+    | 'build'
+    | 'plant'
+    | 'water'
+    | 'harvest'
+    | 'fertilizer-natural'
+    | 'fertilizer-chemical';
+
+type PestType = 'Gusanos' | 'Hongos' | 'Pájaros';
+
+interface CropDefinition {
+    label: string;
+    description: string;
+    baseTime: number;
+    baseYield: number;
+    baseCoins: number;
+    baseXp: number;
+    seasonBoost?: Partial<Record<SeasonName, number>>;
+}
+
+interface SeasonDefinition {
+    name: SeasonName;
+    description: string;
+    drain: number;
+    bonuses: Partial<Record<CropKey, number>>;
+    color: string;
+}
+
+interface FertilizerState {
+    type: FertilizerType;
+    remaining: number;
+}
+
+interface CropInstance {
+    type: CropKey;
+    growth: number;
+    required: number;
+}
+
+interface TileState {
+    id: number;
+    x: number;
+    y: number;
+    type: 'wild' | 'soil';
+    moisture: number;
+    crop: CropInstance | null;
+    pest: PestType | null;
+    fertilizer: FertilizerState | null;
+    chemicalResidue: boolean;
+}
+
+interface Mission {
+    id: string;
+    level: number;
+    title: string;
+    description: string;
+    check: () => boolean;
+    xpReward: number;
+    coinReward: number;
+    isComplete: boolean;
+}
+
 const logout = () => {
     router.post('/logout');
 };
 
-// Referencias para el canvas y el juego
-const canvasRef = ref<HTMLCanvasElement>();
-const gameMode = ref<'explore' | 'plant'>('explore');
+const GRID_SIZE = 5;
+const TICK_INTERVAL = 1000;
+const SEASON_DURATION = 45000;
 
-// Variables de Three.js
-let scene: THREE.Scene;
-let camera: THREE.PerspectiveCamera;
-let renderer: THREE.WebGLRenderer;
-const terrainTiles: THREE.Mesh[] = []; // Array de cuadros del terreno
-let raycaster: THREE.Raycaster;
-let mouse: THREE.Vector2;
-let textureLoader: THREE.TextureLoader;
-let originalMaterial: THREE.MeshStandardMaterial;
-let plantMaterial: THREE.MeshStandardMaterial;
+const crops: Record<CropKey, CropDefinition> = {
+    papa: {
+        label: 'Papa',
+        description: 'Tubérculo noble y rendidor, ideal para el otoño.',
+        baseTime: 60,
+        baseYield: 3,
+        baseCoins: 35,
+        baseXp: 28,
+        seasonBoost: {
+            Otoño: 1.25,
+        },
+    },
+    alfalfa: {
+        label: 'Alfalfa',
+        description: 'Forraje nutritivo que ama la primavera.',
+        baseTime: 55,
+        baseYield: 4,
+        baseCoins: 28,
+        baseXp: 22,
+        seasonBoost: {
+            Primavera: 1.3,
+        },
+    },
+    maiz: {
+        label: 'Maíz',
+        description: 'Crece alto en verano, pero exige mucha agua.',
+        baseTime: 70,
+        baseYield: 5,
+        baseCoins: 40,
+        baseXp: 30,
+        seasonBoost: {
+            Verano: 1.25,
+        },
+    },
+    zanahoria: {
+        label: 'Zamaroria',
+        description: 'Zanahoria resistente al frío, perfecta para el invierno.',
+        baseTime: 65,
+        baseYield: 4,
+        baseCoins: 34,
+        baseXp: 26,
+        seasonBoost: {
+            Invierno: 1.2,
+        },
+    },
+};
 
-// Variables para el zoom
-let zoomLevel = 1;
-const MIN_ZOOM = 0.5;
-const MAX_ZOOM = 3;
-const ZOOM_SPEED = 0.1;
+const seasons: SeasonDefinition[] = [
+    {
+        name: 'Primavera',
+        description: 'Mejores cosechas de alfalfa y clima templado.',
+        drain: 4,
+        bonuses: { alfalfa: 1.2 },
+        color: 'bg-green-100 text-green-800',
+    },
+    {
+        name: 'Verano',
+        description: 'El maíz crece más rápido pero necesita más agua.',
+        drain: 6,
+        bonuses: { maiz: 1.25 },
+        color: 'bg-yellow-100 text-yellow-800',
+    },
+    {
+        name: 'Otoño',
+        description: 'Tiempo de papas con mejor rendimiento.',
+        drain: 4,
+        bonuses: { papa: 1.2 },
+        color: 'bg-orange-100 text-orange-800',
+    },
+    {
+        name: 'Invierno',
+        description: 'La zamaroria resiste mejor al frío.',
+        drain: 5,
+        bonuses: { zanahoria: 1.15 },
+        color: 'bg-blue-100 text-blue-800',
+    },
+];
 
-// Manejar zoom con rueda del mouse
-const onCanvasWheel = (event: WheelEvent) => {
-    event.preventDefault();
+const irrigationSystems = [
+    {
+        level: 1,
+        name: 'Riego por gravedad',
+        detail: 'Baldes y canales manuales. ¡A ejercitar esos brazos!',
+        multiplier: 1,
+    },
+    {
+        level: 2,
+        name: 'Riego básico con canales',
+        detail: 'Zanjas y tuberías sencillas para humedecer varias parcelas.',
+        multiplier: 1.15,
+    },
+    {
+        level: 3,
+        name: 'Riego por aspersión',
+        detail: 'Aspersores automáticos que mantienen la humedad.',
+        multiplier: 1.3,
+    },
+    {
+        level: 4,
+        name: 'Riego automatizado inteligente',
+        detail: 'Sensores de humedad que riegan solos.',
+        multiplier: 1.45,
+    },
+];
 
-    // Calcular el nuevo nivel de zoom
-    const delta = event.deltaY > 0 ? -ZOOM_SPEED : ZOOM_SPEED;
-    const newZoomLevel = Math.max(
-        MIN_ZOOM,
-        Math.min(MAX_ZOOM, zoomLevel + delta),
-    );
+const pestTypes: PestType[] = ['Gusanos', 'Hongos', 'Pájaros'];
 
-    if (newZoomLevel !== zoomLevel) {
-        zoomLevel = newZoomLevel;
+const createTiles = () =>
+    Array.from({ length: GRID_SIZE * GRID_SIZE }, (_, index): TileState => ({
+        id: index,
+        x: Math.floor(index / GRID_SIZE),
+        y: index % GRID_SIZE,
+        type: 'wild',
+        moisture: 50,
+        crop: null,
+        pest: null,
+        fertilizer: null,
+        chemicalResidue: false,
+    }));
 
-        // Aplicar zoom ajustando la posición de la cámara
-        const baseDistance = 20; // Distancia base de la cámara
-        const newDistance = baseDistance / zoomLevel;
+const tiles = reactive<TileState[]>(createTiles());
 
-        // Mantener la dirección de la cámara pero cambiar la distancia
-        const direction = new THREE.Vector3();
-        camera.getWorldDirection(direction);
-        direction.negate(); // Invertir para obtener la dirección hacia la cámara
+const player = reactive({
+    level: 1,
+    xp: 0,
+    coins: 120,
+});
 
-        // Calcular nueva posición manteniendo el ángulo
-        const targetPosition = new THREE.Vector3(0, 0, 0); // Centro del terreno
-        const newPosition = targetPosition
-            .clone()
-            .add(direction.multiplyScalar(newDistance));
-        newPosition.y = Math.max(5, newPosition.y); // Mantener altura mínima
+const hasChickens = ref(false);
+const hasBees = ref(false);
 
-        camera.position.copy(newPosition);
-        camera.lookAt(targetPosition);
+const availableCrops = computed(() => {
+    if (player.level >= 4) {
+        return ['papa', 'alfalfa', 'maiz', 'zanahoria'] satisfies CropKey[];
+    }
+    if (player.level === 3) {
+        return ['papa', 'alfalfa', 'maiz', 'zanahoria'] satisfies CropKey[];
+    }
+    if (player.level === 2) {
+        return ['papa', 'alfalfa', 'maiz'] satisfies CropKey[];
+    }
+    return ['papa', 'alfalfa'] satisfies CropKey[];
+});
+
+const selectedCrop = ref<CropKey>('papa');
+
+watch(availableCrops, (list) => {
+    if (!list.includes(selectedCrop.value)) {
+        selectedCrop.value = list[0];
+    }
+});
+
+const selectedTool = ref<Tool>('build');
+const eventLog = ref<string[]>([]);
+
+const currentSeasonIndex = ref(0);
+const seasonTimer = ref<number>();
+const gameTimer = ref<number>();
+
+const progress = reactive({
+    builtPlots: 0,
+    harvestedCrops: 0,
+    wateringActions: 0,
+    pestsCleared: 0,
+    automationOnline: false,
+});
+
+const missions = reactive<Mission[]>([
+    {
+        id: 'level-1',
+        level: 1,
+        title: 'Nivel 1: aprender a sembrar y cosechar',
+        description: 'Construye un bloque de cultivo y cosecha tu primera planta.',
+        xpReward: 30,
+        coinReward: 25,
+        isComplete: false,
+        check: () => progress.builtPlots >= 1 && progress.harvestedCrops >= 1,
+    },
+    {
+        id: 'level-2',
+        level: 2,
+        title: 'Nivel 2: dominar riego básico',
+        description: 'Usa el riego para mantener al menos tres parcelas saludables.',
+        xpReward: 45,
+        coinReward: 40,
+        isComplete: false,
+        check: () => player.level >= 2 && progress.wateringActions >= 3,
+    },
+    {
+        id: 'level-3',
+        level: 3,
+        title: 'Nivel 3: proteger cultivos de plagas',
+        description: 'Controla plagas en dos parcelas usando tus fertilizantes.',
+        xpReward: 60,
+        coinReward: 55,
+        isComplete: false,
+        check: () => player.level >= 3 && progress.pestsCleared >= 2,
+    },
+    {
+        id: 'level-4',
+        level: 4,
+        title: 'Nivel 4: automatizar el riego y mejorar la productividad',
+        description: 'Activa el sistema inteligente y cosecha con sensores en marcha.',
+        xpReward: 80,
+        coinReward: 70,
+        isComplete: false,
+        check: () => player.level >= 4 && progress.automationOnline,
+    },
+]);
+
+const xpGoals = [0, 120, 280, 520, 0];
+
+const irrigationMultiplier = computed(() => {
+    const system = irrigationSystems[player.level - 1] ?? irrigationSystems[0];
+    return system.multiplier;
+});
+
+const xpProgress = computed(() => {
+    const goal = xpGoals[player.level] ?? xpGoals[xpGoals.length - 1];
+    const currentGoal = xpGoals[player.level - 1] ?? 0;
+    const span = goal - currentGoal || 1;
+    return Math.min(100, ((player.xp - currentGoal) / span) * 100);
+});
+
+const currentSeason = computed(() => seasons[currentSeasonIndex.value]);
+
+const pushLog = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    eventLog.value.unshift(`[${timestamp}] ${message}`);
+    if (eventLog.value.length > 8) {
+        eventLog.value.pop();
     }
 };
 
-// Configuración del terreno
-const GRID_SIZE = 10; // 6x6 cuadros
-const TILE_SIZE = 2; // Cada cuadro de 3x3 unidades
-const TOTAL_SIZE = GRID_SIZE * TILE_SIZE; // 18x18 unidades totales
-
-// Inicializar el juego 3D
-const initGame = () => {
-    if (!canvasRef.value) return;
-
-    // Crear la escena
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87ceeb); // Color cielo azul
-
-    // Crear el texture loader
-    textureLoader = new THREE.TextureLoader();
-
-    // Crear la cámara
-    camera = new THREE.PerspectiveCamera(
-        40,
-        canvasRef.value.clientWidth / canvasRef.value.clientHeight,
-        0.1,
-        1000,
-    );
-    camera.position.set(0, 10, 20);
-    camera.lookAt(0, 0, 0);
-
-    // Crear el renderer
-    renderer = new THREE.WebGLRenderer({
-        canvas: canvasRef.value,
-        antialias: true,
-    });
-    renderer.setSize(canvasRef.value.clientWidth, canvasRef.value.clientHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    // Cargar texturas de Poliigon
-    const baseColorTexture = textureLoader.load(
-        '/textures/Poliigon_GrassPatchyGround_4585_BaseColor.jpg',
-    );
-    const normalTexture = textureLoader.load(
-        '/textures/Poliigon_GrassPatchyGround_4585_Normal.png',
-    );
-    const roughnessTexture = textureLoader.load(
-        '/textures/Poliigon_GrassPatchyGround_4585_Roughness.jpg',
-    );
-    const metallicTexture = textureLoader.load(
-        '/textures/Poliigon_GrassPatchyGround_4585_Metallic.jpg',
-    );
-
-    // ✅ Hacer que la textura se repita
-    baseColorTexture.wrapS = baseColorTexture.wrapT = THREE.RepeatWrapping;
-    normalTexture.wrapS = normalTexture.wrapT = THREE.RepeatWrapping;
-    roughnessTexture.wrapS = roughnessTexture.wrapT = THREE.RepeatWrapping;
-    metallicTexture.wrapS = metallicTexture.wrapT = THREE.RepeatWrapping;
-
-    // Aumentar la repetición para ver más detalle de la hierba
-    const repeatTimes = 1; // Esto hará que la textura se repita más veces
-    baseColorTexture.repeat.set(repeatTimes, repeatTimes);
-    normalTexture.repeat.set(repeatTimes, repeatTimes);
-    roughnessTexture.repeat.set(repeatTimes, repeatTimes);
-    metallicTexture.repeat.set(repeatTimes, repeatTimes);
-
-    // Configurar filtros para mejor calidad
-    baseColorTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    normalTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    roughnessTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    metallicTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-    // Material original con texturas de hierba (para cada cuadro individual)
-    originalMaterial = new THREE.MeshStandardMaterial({
-        map: baseColorTexture,
-        normalMap: normalTexture,
-        roughnessMap: roughnessTexture,
-        metalnessMap: metallicTexture,
-        metalness: 0.0,
-        roughness: 1.0,
-        normalScale: new THREE.Vector2(0, 0), // Aumentar efecto del normal map
-    });
-
-    // Material para modo siembra (tierra)
-    plantMaterial = new THREE.MeshStandardMaterial({
-        color: 0x8b4513,
-        roughness: 0.9,
-        metalness: 0.0,
-    });
-
-    // Crear cuadros individuales del terreno
-    createTerrainTiles();
-
-    // Agregar iluminación
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
-    scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(10, 10, 5);
-    directionalLight.castShadow = true;
-    directionalLight.shadow.mapSize.width = 2048;
-    directionalLight.shadow.mapSize.height = 2048;
-    scene.add(directionalLight);
-
-    // Configurar raycaster para detectar clicks
-    raycaster = new THREE.Raycaster();
-    mouse = new THREE.Vector2();
-
-    // Event listener para clicks en el canvas
-    canvasRef.value.addEventListener('click', onCanvasClick);
-
-    // Event listener para zoom con rueda del mouse
-    canvasRef.value.addEventListener('wheel', onCanvasWheel, {
-        passive: false,
-    });
-
-    // Iniciar el loop de renderizado
-    animate();
+const adjustCoins = (amount: number) => {
+    player.coins = Math.max(0, player.coins + amount);
 };
 
-// Crear los cuadros individuales del terreno
-const createTerrainTiles = () => {
-    const tileGeometry = new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE, 16, 16);
+const awardXp = (amount: number) => {
+    player.xp += amount;
+    checkLevelUp();
+};
 
-    for (let x = 0; x < GRID_SIZE; x++) {
-        for (let z = 0; z < GRID_SIZE; z++) {
-            // Crear material único para cada cuadro
-            const tileMaterial = originalMaterial.clone();
-
-            // Crear el cuadro
-            const tile = new THREE.Mesh(tileGeometry, tileMaterial);
-
-            // Posicionar el cuadro
-            const posX = (x - GRID_SIZE / 2 + 0.5) * TILE_SIZE;
-            const posZ = (z - GRID_SIZE / 2 + 0.5) * TILE_SIZE;
-
-            tile.position.set(posX, 0, posZ);
-            tile.rotation.x = -Math.PI / 2;
-            tile.receiveShadow = true;
-
-            // Agregar propiedades personalizadas para identificar el cuadro
-            tile.userData = {
-                gridX: x,
-                gridZ: z,
-                isPlanted: false,
-                originalMaterial: tileMaterial,
-                plantMaterial: plantMaterial.clone(),
-            };
-
-            terrainTiles.push(tile);
-            scene.add(tile);
-        }
+const buildSoil = (tile: TileState) => {
+    if (tile.type === 'soil') {
+        pushLog('Esta parcela ya está preparada para cultivar.');
+        return;
     }
+    const cost = 12;
+    if (player.coins < cost) {
+        pushLog('Necesitas más monedas para preparar este terreno.');
+        return;
+    }
+    adjustCoins(-cost);
+    tile.type = 'soil';
+    tile.moisture = 60;
+    pushLog('Has preparado un nuevo bloque de tierra fértil.');
+    progress.builtPlots += 1;
+    updateMissions();
 };
 
-// Manejar clicks en el canvas
-const onCanvasClick = (event: MouseEvent) => {
-    if (!canvasRef.value) return;
+const plantCrop = (tile: TileState) => {
+    if (tile.type !== 'soil') {
+        pushLog('Primero prepara la parcela antes de sembrar.');
+        return;
+    }
+    if (tile.crop) {
+        pushLog('Ya hay un cultivo creciendo aquí.');
+        return;
+    }
+    const cropKey = selectedCrop.value;
+    if (!availableCrops.value.includes(cropKey)) {
+        pushLog('Aún no has desbloqueado esta semilla.');
+        return;
+    }
+    const seedCost = 8;
+    if (player.coins < seedCost) {
+        pushLog('Necesitas más monedas para comprar estas semillas.');
+        return;
+    }
+    adjustCoins(-seedCost);
+    const cropDefinition = crops[cropKey];
+    tile.crop = {
+        type: cropKey,
+        growth: 0,
+        required: cropDefinition.baseTime,
+    };
+    tile.moisture = Math.max(tile.moisture, 60);
+    tile.pest = null;
+    tile.chemicalResidue = false;
+    pushLog(`Sembraste ${cropDefinition.label}. ¡Cuídala bien!`);
+};
 
-    const rect = canvasRef.value.getBoundingClientRect();
-    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+const waterTile = (tile: TileState) => {
+    if (tile.type !== 'soil') {
+        pushLog('Primero convierte esta parcela en tierra cultivable.');
+        return;
+    }
+    const tilesToWater = player.level >= 2 ? tiles.filter((t) => t.x === tile.x) : [tile];
+    const hydration = player.level >= 3 ? 50 : 35;
+    tilesToWater.forEach((plot) => {
+        plot.moisture = Math.min(100, plot.moisture + hydration);
+    });
+    progress.wateringActions += 1;
+    pushLog(
+        player.level >= 2
+            ? 'El agua fluye por los canales y humedece toda la hilera.'
+            : 'Has regado la parcela manualmente.',
+    );
+    updateMissions();
+};
 
-    raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObjects(terrainTiles);
+const applyFertilizer = (tile: TileState, type: FertilizerType) => {
+    if (tile.type !== 'soil') {
+        pushLog('Necesitas un campo preparado para aplicar fertilizantes.');
+        return;
+    }
+    if (!tile.crop) {
+        pushLog('No hay plantas para nutrir en esta parcela.');
+        return;
+    }
 
-    if (intersects.length > 0) {
-        const clickedTile = intersects[0].object as THREE.Mesh;
+    const cost = type === 'natural' ? (hasChickens.value ? 0 : 6) : 12;
+    if (player.coins < cost) {
+        pushLog('No tienes suficientes monedas para este fertilizante.');
+        return;
+    }
+    adjustCoins(-cost);
 
-        // Alternar entre modo exploración y siembra para el cuadro clickeado
-        if (clickedTile.userData.isPlanted) {
-            // Volver a hierba
-            clickedTile.material = clickedTile.userData.originalMaterial;
-            clickedTile.userData.isPlanted = false;
-            gameMode.value = 'explore';
+    if (type === 'natural') {
+        tile.fertilizer = { type: 'natural', remaining: 45 };
+        tile.moisture = Math.min(100, tile.moisture + 20);
+        if (tile.pest) {
+            tile.pest = null;
+            pushLog('El fertilizante natural controló la plaga de forma sostenible.');
+            progress.pestsCleared += 1;
         } else {
-            // Cambiar a tierra para siembra
-            clickedTile.material = clickedTile.userData.plantMaterial;
-            clickedTile.userData.isPlanted = true;
-            gameMode.value = 'plant';
+            pushLog('Aplicaste compost y abonos naturales. La tierra revive.');
         }
+    } else {
+        tile.fertilizer = { type: 'chemical', remaining: 60 };
+        tile.moisture = Math.min(100, tile.moisture + 10);
+        tile.pest = null;
+        tile.chemicalResidue = true;
+        progress.pestsCleared += 1;
+        pushLog('El fertilizante químico eliminó la plaga y acelerará el crecimiento.');
+    }
+    updateMissions();
+};
+
+const harvestTile = (tile: TileState) => {
+    if (!tile.crop) {
+        pushLog('No hay cultivos listos para cosechar aquí.');
+        return;
+    }
+    if (tile.crop.growth < tile.crop.required) {
+        pushLog('Este cultivo aún necesita más tiempo.');
+        return;
+    }
+
+    const cropDefinition = crops[tile.crop.type];
+    const beesBonus = hasBees.value ? 1.2 : 1;
+    const fertilizerBonus =
+        tile.fertilizer?.type === 'natural'
+            ? 1.1
+            : tile.fertilizer?.type === 'chemical'
+            ? 1.25
+            : 1;
+    const seasonBonus = currentSeason.value.bonuses[tile.crop.type] ?? 1;
+    const yieldAmount = Math.round(
+        cropDefinition.baseYield * beesBonus * fertilizerBonus * seasonBonus,
+    );
+    const coinReward = Math.round(
+        cropDefinition.baseCoins * yieldAmount * (tile.chemicalResidue ? 0.95 : 1),
+    );
+    const xpReward = Math.round(
+        cropDefinition.baseXp * (tile.chemicalResidue ? 0.9 : 1) * fertilizerBonus,
+    );
+
+    adjustCoins(coinReward);
+    awardXp(xpReward);
+    progress.harvestedCrops += 1;
+
+    pushLog(
+        `Cosechaste ${cropDefinition.label} y obtuviste ${coinReward} monedas y ${xpReward} XP.`,
+    );
+
+    if (hasChickens.value) {
+        pushLog('Tus gallinas generaron abono natural adicional.');
+        tile.fertilizer = { type: 'natural', remaining: 30 };
+    } else {
+        tile.fertilizer = null;
+    }
+
+    tile.crop = null;
+    tile.pest = null;
+    tile.chemicalResidue = false;
+
+    updateMissions();
+};
+
+const handleTileClick = (tile: TileState) => {
+    switch (selectedTool.value) {
+        case 'build':
+            buildSoil(tile);
+            break;
+        case 'plant':
+            plantCrop(tile);
+            break;
+        case 'water':
+            waterTile(tile);
+            break;
+        case 'harvest':
+            harvestTile(tile);
+            break;
+        case 'fertilizer-natural':
+            applyFertilizer(tile, 'natural');
+            break;
+        case 'fertilizer-chemical':
+            applyFertilizer(tile, 'chemical');
+            break;
     }
 };
 
-// Loop de animación
-const animate = () => {
-    requestAnimationFrame(animate);
-    renderer.render(scene, camera);
+const pestChance = () => {
+    let base = 0.02;
+    if (currentSeason.value.name === 'Primavera') {
+        base += 0.01;
+    }
+    if (currentSeason.value.name === 'Verano') {
+        base += 0.015;
+    }
+    return base;
 };
 
-// Manejar redimensionamiento de ventana
-const handleResize = () => {
-    if (!canvasRef.value) return;
-
-    camera.aspect = canvasRef.value.clientWidth / canvasRef.value.clientHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(canvasRef.value.clientWidth, canvasRef.value.clientHeight);
+const spawnPests = (tile: TileState) => {
+    if (!tile.crop || tile.pest) {
+        return;
+    }
+    if (tile.fertilizer?.type === 'natural') {
+        return;
+    }
+    const chance = pestChance();
+    if (Math.random() < chance) {
+        tile.pest = pestTypes[Math.floor(Math.random() * pestTypes.length)];
+        pushLog(`Han aparecido ${tile.pest?.toLowerCase()} en una parcela.`);
+    }
 };
 
-// Resetear el modo de juego
-const resetGameMode = () => {
-    gameMode.value = 'explore';
-    terrainTiles.forEach((tile) => {
-        tile.material = tile.userData.originalMaterial;
-        tile.userData.isPlanted = false;
+const irrigationMultiplierValue = computed(() => irrigationMultiplier.value);
+
+const handleTick = () => {
+    tiles.forEach((tile) => {
+        if (tile.type !== 'soil') {
+            tile.moisture = Math.max(0, tile.moisture - 2);
+            return;
+        }
+
+        const seasonalDrain = seasons[currentSeasonIndex.value].drain;
+        let moistureDrain = seasonalDrain;
+        if (tile.crop?.type === 'maiz' && currentSeason.value.name === 'Verano') {
+            moistureDrain += 2;
+        }
+        if (tile.crop?.type === 'zanahoria' && currentSeason.value.name === 'Invierno') {
+            moistureDrain = Math.max(1, moistureDrain - 2);
+        }
+
+        const irrigationHelp = player.level >= 4 ? moistureDrain : player.level;
+        const finalDrain = player.level >= 4 ? 0 : Math.max(1, moistureDrain - irrigationHelp);
+        tile.moisture = Math.max(0, tile.moisture - finalDrain);
+
+        if (tile.crop) {
+            spawnPests(tile);
+            if (tile.fertilizer) {
+                tile.fertilizer.remaining -= 1;
+                if (tile.fertilizer.remaining <= 0) {
+                    tile.fertilizer = null;
+                }
+            }
+
+            const moistureFactor = tile.moisture >= 60 ? 1 : tile.moisture >= 30 ? 0.6 : 0.2;
+            const irrigationBonus = irrigationMultiplierValue.value;
+            const fertilizerBonus =
+                tile.fertilizer?.type === 'natural'
+                    ? 1.15
+                    : tile.fertilizer?.type === 'chemical'
+                    ? 1.35
+                    : 1;
+            const pestPenalty = tile.pest ? 0 : 1;
+            const seasonBonus =
+                seasons[currentSeasonIndex.value].bonuses[tile.crop.type] ??
+                (crops[tile.crop.type].seasonBoost?.[currentSeason.value.name] ?? 1);
+            const beesBonus = hasBees.value ? 1.1 : 1;
+
+            const growthIncrease =
+                1 * moistureFactor * irrigationBonus * fertilizerBonus * pestPenalty * seasonBonus * beesBonus;
+
+            tile.crop.growth = Math.min(tile.crop.required, tile.crop.growth + growthIncrease);
+        }
+
+        if (player.level >= 4 && tile.type === 'soil') {
+            tile.moisture = Math.max(tile.moisture, 70);
+            progress.automationOnline = true;
+        }
     });
+};
+
+const advanceSeason = () => {
+    currentSeasonIndex.value = (currentSeasonIndex.value + 1) % seasons.length;
+    pushLog(`Ha llegado ${currentSeason.value.name}. ${currentSeason.value.description}`);
+};
+
+const xpGoalsComputed = computed(() => xpGoals);
+
+const checkLevelUp = () => {
+    const goals = xpGoalsComputed.value;
+    while (player.level < 4 && player.xp >= goals[player.level]) {
+        player.level += 1;
+        const system = irrigationSystems[player.level - 1];
+        adjustCoins(50);
+        pushLog(
+            `¡Ascendiste al nivel ${player.level}! Desbloqueaste ${system.name} y nuevas recompensas.`,
+        );
+        updateMissions();
+    }
+};
+
+const updateMissions = () => {
+    missions.forEach((mission) => {
+        if (!mission.isComplete && mission.check()) {
+            mission.isComplete = true;
+            adjustCoins(mission.coinReward);
+            awardXp(mission.xpReward);
+            pushLog(`Completaste "${mission.title}". Recompensa entregada.`);
+        }
+    });
+};
+
+const resetGame = () => {
+    tiles.splice(0, tiles.length, ...createTiles());
+    player.level = 1;
+    player.xp = 0;
+    player.coins = 120;
+    hasBees.value = false;
+    hasChickens.value = false;
+    progress.builtPlots = 0;
+    progress.harvestedCrops = 0;
+    progress.pestsCleared = 0;
+    progress.wateringActions = 0;
+    progress.automationOnline = false;
+    missions.forEach((mission) => {
+        mission.isComplete = false;
+    });
+    currentSeasonIndex.value = 0;
+    eventLog.value = [];
+    pushLog('La granja ha sido reiniciada. ¡Hora de comenzar de nuevo!');
+};
+
+const buyChickens = () => {
+    if (hasChickens.value) {
+        pushLog('Ya tienes gallinas felices en tu granja.');
+        return;
+    }
+    const cost = 80;
+    if (player.coins < cost) {
+        pushLog('Necesitas más monedas para construir el gallinero.');
+        return;
+    }
+    adjustCoins(-cost);
+    hasChickens.value = true;
+    pushLog('Compraste gallinas. Ahora producirán abono natural para tus cultivos.');
+};
+
+const buyBees = () => {
+    if (hasBees.value) {
+        pushLog('Tus abejas ya están polinizando a toda máquina.');
+        return;
+    }
+    const cost = 90;
+    if (player.coins < cost) {
+        pushLog('Necesitas más monedas para instalar las colmenas.');
+        return;
+    }
+    adjustCoins(-cost);
+    hasBees.value = true;
+    pushLog('Las abejas han llegado. La polinización mejorará tus cosechas.');
 };
 
 onMounted(() => {
-    initGame();
-    window.addEventListener('resize', handleResize);
+    pushLog('Bienvenido a AgroSpace. ¡Construye tu granja sostenible!');
+    gameTimer.value = window.setInterval(handleTick, TICK_INTERVAL);
+    seasonTimer.value = window.setInterval(advanceSeason, SEASON_DURATION);
+});
+
+onBeforeUnmount(() => {
+    if (gameTimer.value) {
+        clearInterval(gameTimer.value);
+    }
+    if (seasonTimer.value) {
+        clearInterval(seasonTimer.value);
+    }
 });
 </script>
 
 <template>
     <Head title="Granja - AgroSpace" />
 
-    <div
-        class="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-amber-50"
-    >
-        <!-- Top Bar -->
-        <header
-            class="border-b border-green-200 bg-white/80 shadow-sm backdrop-blur-sm"
-        >
+    <div class="min-h-screen bg-gradient-to-br from-lime-50 via-sky-50 to-amber-50">
+        <header class="border-b border-emerald-200 bg-white/80 shadow-sm backdrop-blur-sm">
             <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                 <div class="flex h-16 items-center justify-between">
-                    <!-- Logo/Título -->
                     <div class="flex items-center space-x-4">
-                        <h1
-                            class="font-fredoka text-2xl font-bold text-green-800"
-                        >
-                            AgroSpace - Mi Granja
+                        <h1 class="font-fredoka text-2xl font-bold text-emerald-700">
+                            AgroSpace - Mi Granja Sostenible
                         </h1>
-
-                        <!-- Indicador de modo -->
                         <div class="flex items-center space-x-2">
-                            <span class="text-sm font-medium text-gray-600"
-                                >Modo:</span
-                            >
-                            <span
-                                :class="
-                                    gameMode === 'explore'
-                                        ? 'bg-blue-100 text-blue-800'
-                                        : 'bg-orange-100 text-orange-800'
-                                "
-                                class="rounded-full px-3 py-1 text-sm font-semibold"
-                            >
-                                {{
-                                    gameMode === 'explore'
-                                        ? 'Explorar'
-                                        : 'Listo para Sembrar'
-                                }}
+                            <span class="text-sm font-medium text-gray-600">Temporada:</span>
+                            <span :class="`rounded-full px-3 py-1 text-sm font-semibold ${currentSeason.color}`">
+                                {{ currentSeason.name }}
                             </span>
                         </div>
                     </div>
-
-                    <!-- Opciones de usuario -->
                     <div class="flex items-center space-x-4">
-                        <!-- Volver al Dashboard -->
                         <Link
                             href="/dashboard"
                             class="font-fredoka flex items-center space-x-2 rounded-lg bg-blue-100 px-4 py-2 font-semibold text-blue-800 transition-colors hover:bg-blue-200"
@@ -327,20 +707,16 @@ onMounted(() => {
                             <Home class="h-5 w-5" />
                             <span>Dashboard</span>
                         </Link>
-
-                        <!-- Ver Perfil -->
                         <Link
                             href="/profile"
-                            class="font-fredoka flex items-center space-x-2 rounded-lg bg-green-100 px-4 py-2 font-semibold text-green-800 transition-colors hover:bg-green-200"
+                            class="font-fredoka flex items-center space-x-2 rounded-lg bg-emerald-100 px-4 py-2 font-semibold text-emerald-800 transition-colors hover:bg-emerald-200"
                         >
                             <User class="h-5 w-5" />
                             <span>Perfil</span>
                         </Link>
-
-                        <!-- Salir -->
                         <button
                             @click="logout"
-                            class="font-fredoka flex items-center space-x-2 rounded-lg bg-red-100 px-4 py-2 font-semibold text-red-800 transition-colors hover:bg-red-200"
+                            class="font-fredoka flex items-center space-x-2 rounded-lg bg-rose-100 px-4 py-2 font-semibold text-rose-800 transition-colors hover:bg-rose-200"
                         >
                             <LogOut class="h-5 w-5" />
                             <span>Salir</span>
@@ -350,80 +726,300 @@ onMounted(() => {
             </div>
         </header>
 
-        <!-- Contenido Principal -->
         <main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-            <!-- Panel de Control -->
-            <div
-                class="mb-6 rounded-lg bg-white/80 p-4 shadow-sm backdrop-blur-sm"
-            >
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h2 class="text-lg font-semibold text-gray-800">
-                            Control de la Granja
-                        </h2>
-                        <p class="text-sm text-gray-600">
-                            {{
-                                gameMode === 'explore'
-                                    ? 'Haz click en el terreno para prepararlo para la siembra'
-                                    : 'El terreno está listo para sembrar. Haz click en "Resetear" para volver al modo exploración'
-                            }}
-                        </p>
+            <div class="grid gap-6 lg:grid-cols-[2fr,1fr]">
+                <section class="space-y-6">
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <div class="rounded-lg bg-white/85 p-4 shadow-sm">
+                            <h2 class="text-lg font-semibold text-gray-800">Progreso del agricultor</h2>
+                            <div class="mt-3 space-y-3 text-sm text-gray-600">
+                                <p>
+                                    Nivel actual:
+                                    <span class="font-semibold text-emerald-600">{{ player.level }}</span>
+                                </p>
+                                <div>
+                                    <div class="mb-1 flex items-center justify-between">
+                                        <span>Experiencia</span>
+                                        <span class="font-semibold text-emerald-600">{{ player.xp }} XP</span>
+                                    </div>
+                                    <div class="h-2 w-full overflow-hidden rounded-full bg-emerald-100">
+                                        <div
+                                            class="h-full rounded-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all"
+                                            :style="{ width: `${xpProgress}%` }"
+                                        />
+                                    </div>
+                                </div>
+                                <p>
+                                    Monedas disponibles:
+                                    <span class="font-semibold text-amber-600">{{ player.coins }}</span>
+                                </p>
+                                <p>
+                                    Sistema de riego:
+                                    <span class="font-semibold text-sky-600">
+                                        {{ irrigationSystems[player.level - 1]?.name }}
+                                    </span>
+                                </p>
+                                <p class="text-xs text-gray-500">
+                                    {{ irrigationSystems[player.level - 1]?.detail }}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="rounded-lg bg-white/85 p-4 shadow-sm">
+                            <h2 class="text-lg font-semibold text-gray-800">Calendario agrícola</h2>
+                            <p class="mt-2 text-sm text-gray-600">{{ currentSeason.description }}</p>
+                            <div class="mt-4 grid grid-cols-4 gap-2 text-xs font-semibold">
+                                <div
+                                    v-for="(season, index) in seasons"
+                                    :key="season.name"
+                                    class="rounded-md border p-2 text-center"
+                                    :class="[
+                                        index === currentSeasonIndex
+                                            ? 'border-emerald-400 bg-emerald-50 text-emerald-700'
+                                            : 'border-gray-200 bg-gray-50 text-gray-500',
+                                    ]"
+                                >
+                                    <p>{{ season.name }}</p>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
-                    <button
-                        v-if="gameMode === 'plant'"
-                        @click="resetGameMode"
-                        class="rounded-lg bg-gray-100 px-4 py-2 font-semibold text-gray-800 transition-colors hover:bg-gray-200"
-                    >
-                        Resetear Modo
-                    </button>
-                </div>
-            </div>
+                    <div class="rounded-lg bg-white/90 p-4 shadow-sm">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <h2 class="text-lg font-semibold text-gray-800">
+                                    Herramientas y semillas disponibles
+                                </h2>
+                                <p class="text-sm text-gray-600">
+                                    Selecciona una herramienta y luego haz clic en una parcela para usarla.
+                                </p>
+                            </div>
+                            <button
+                                @click="resetGame"
+                                class="rounded-lg bg-rose-100 px-4 py-2 text-sm font-semibold text-rose-600 transition-colors hover:bg-rose-200"
+                            >
+                                Reiniciar granja
+                            </button>
+                        </div>
 
-            <!-- Canvas del Juego -->
-            <div class="rounded-lg bg-white/80 p-4 shadow-sm backdrop-blur-sm">
-                <div class="aspect-video w-full overflow-hidden rounded-lg">
-                    <canvas
-                        ref="canvasRef"
-                        class="h-full w-full cursor-pointer"
-                        style="display: block"
-                    />
-                </div>
-            </div>
+                        <div class="mt-4 grid gap-3 lg:grid-cols-2">
+                            <div class="space-y-2">
+                                <h3 class="text-sm font-semibold text-gray-700">Herramientas</h3>
+                                <div class="flex flex-wrap gap-2">
+                                    <button
+                                        v-for="tool in [
+                                            { id: 'build', label: 'Construir bloque' },
+                                            { id: 'plant', label: 'Sembrar' },
+                                            { id: 'water', label: 'Regar' },
+                                            { id: 'fertilizer-natural', label: 'Fert. natural' },
+                                            { id: 'fertilizer-chemical', label: 'Fert. químico' },
+                                            { id: 'harvest', label: 'Cosechar' },
+                                        ]"
+                                        :key="tool.id"
+                                        @click="selectedTool = tool.id as Tool"
+                                        :class="[
+                                            'rounded-lg px-3 py-2 text-xs font-semibold transition-colors',
+                                            selectedTool === (tool.id as Tool)
+                                                ? 'bg-emerald-500 text-white shadow'
+                                                : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200',
+                                        ]"
+                                    >
+                                        {{ tool.label }}
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="space-y-2">
+                                <h3 class="text-sm font-semibold text-gray-700">Semillas</h3>
+                                <div class="flex flex-wrap gap-2">
+                                    <button
+                                        v-for="cropKey in availableCrops"
+                                        :key="cropKey"
+                                        @click="selectedCrop = cropKey"
+                                        :class="[
+                                            'rounded-lg px-3 py-2 text-xs font-semibold transition-colors',
+                                            selectedCrop === cropKey
+                                                ? 'bg-amber-500 text-white shadow'
+                                                : 'bg-amber-100 text-amber-700 hover:bg-amber-200',
+                                        ]"
+                                    >
+                                        {{ crops[cropKey].label }}
+                                    </button>
+                                </div>
+                                <p class="text-xs text-gray-500">
+                                    {{ crops[selectedCrop].description }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
 
-            <!-- Instrucciones -->
-            <div
-                class="mt-6 rounded-lg bg-white/80 p-4 shadow-sm backdrop-blur-sm"
-            >
-                <h3 class="mb-2 text-lg font-semibold text-gray-800">
-                    Instrucciones
-                </h3>
-                <ul class="space-y-1 text-sm text-gray-600">
-                    <li>
-                        • Haz click en cualquier parte del terreno verde para
-                        prepararlo para la siembra
-                    </li>
-                    <li>
-                        • El terreno cambiará de color a marrón cuando esté
-                        listo para sembrar
-                    </li>
-                    <li>
-                        • Usa la rueda del mouse para hacer zoom dentro del
-                        canvas (acercar/alejar)
-                    </li>
-                    <li>
-                        • Usa el botón "Resetear Modo" para volver al modo
-                        exploración
-                    </li>
-                    <li>
-                        • El juego usa Three.js para renderizar el terreno 3D
-                    </li>
-                </ul>
+                    <div class="rounded-lg bg-white/90 p-4 shadow-sm">
+                        <h2 class="text-lg font-semibold text-gray-800">Campo de cultivo</h2>
+                        <p class="text-sm text-gray-600">
+                            Construye bloques de tierra, siembra y usa el riego adecuado para avanzar de nivel.
+                        </p>
+                        <div class="mt-4 grid gap-2 sm:grid-cols-5">
+                            <button
+                                v-for="tile in tiles"
+                                :key="tile.id"
+                                @click="handleTileClick(tile)"
+                                class="relative flex h-28 flex-col justify-between rounded-lg border p-2 text-left transition-transform hover:-translate-y-1"
+                                :class="[
+                                    tile.type === 'soil'
+                                        ? 'border-amber-200 bg-amber-50'
+                                        : 'border-lime-200 bg-lime-50',
+                                    tile.crop && tile.crop.growth >= tile.crop.required
+                                        ? 'ring-2 ring-emerald-400'
+                                        : '',
+                                    tile.pest ? 'animate-pulse border-rose-300' : '',
+                                ]"
+                            >
+                                <div class="flex items-center justify-between text-xs font-semibold">
+                                    <span>
+                                        {{ tile.type === 'soil' ? 'Parcela' : 'Terreno' }}
+                                    </span>
+                                    <span class="text-emerald-600">
+                                        {{ tile.moisture }}%
+                                    </span>
+                                </div>
+                                <div class="flex flex-1 items-center justify-center text-center text-sm font-bold">
+                                    <span v-if="tile.crop">
+                                        {{ crops[tile.crop.type].label }}
+                                    </span>
+                                    <span v-else class="text-emerald-500">Disponible</span>
+                                </div>
+                                <div class="space-y-1 text-[10px] text-gray-600">
+                                    <div v-if="tile.crop" class="h-1.5 w-full overflow-hidden rounded-full bg-emerald-100">
+                                        <div
+                                            class="h-full rounded-full bg-emerald-500"
+                                            :style="{
+                                                width: `${Math.min(
+                                                    100,
+                                                    (tile.crop.growth / tile.crop.required) * 100,
+                                                )}%`,
+                                            }"
+                                        />
+                                    </div>
+                                    <p v-if="tile.pest" class="text-rose-500">
+                                        {{ tile.pest }} atacan la parcela
+                                    </p>
+                                    <p v-else-if="tile.crop && tile.crop.growth >= tile.crop.required" class="text-emerald-500">
+                                        ¡Listo para cosechar!
+                                    </p>
+                                    <p v-else-if="tile.crop" class="text-gray-500">
+                                        Crecimiento al {{ Math.round((tile.crop.growth / tile.crop.required) * 100) }}%
+                                    </p>
+                                    <p v-else class="text-gray-400">Usa "Construir" para preparar este suelo.</p>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <aside class="space-y-6">
+                    <div class="rounded-lg bg-white/85 p-4 shadow-sm">
+                        <h2 class="text-lg font-semibold text-gray-800">Animales aliados</h2>
+                        <p class="text-sm text-gray-600">
+                            Mejora la productividad con apoyo animal y agricultura sostenible.
+                        </p>
+                        <div class="mt-4 space-y-3 text-sm">
+                            <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <p class="font-semibold text-amber-700">Gallinas ({{ hasChickens ? 'activa' : 'disponible' }})</p>
+                                        <p class="text-xs text-amber-600">
+                                            Aportan abono natural tras cada cosecha.
+                                        </p>
+                                    </div>
+                                    <button
+                                        @click="buyChickens"
+                                        class="rounded-lg bg-amber-500 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                                        :disabled="hasChickens"
+                                    >
+                                        {{ hasChickens ? 'Comprado' : '80 monedas' }}
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="rounded-lg border border-yellow-200 bg-yellow-50 p-3">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <p class="font-semibold text-yellow-700">Abejas ({{ hasBees ? 'activas' : 'disponibles' }})</p>
+                                        <p class="text-xs text-yellow-600">
+                                            Mejoran la polinización y aumentan la producción.
+                                        </p>
+                                    </div>
+                                    <button
+                                        @click="buyBees"
+                                        class="rounded-lg bg-yellow-500 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                                        :disabled="hasBees"
+                                    >
+                                        {{ hasBees ? 'Compradas' : '90 monedas' }}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="rounded-lg bg-white/85 p-4 shadow-sm">
+                        <h2 class="text-lg font-semibold text-gray-800">Misiones por nivel</h2>
+                        <p class="text-sm text-gray-600">
+                            Completa objetivos educativos para subir de nivel y recibir recompensas.
+                        </p>
+                        <ul class="mt-4 space-y-3 text-sm">
+                            <li
+                                v-for="mission in missions"
+                                :key="mission.id"
+                                class="rounded-lg border p-3"
+                                :class="mission.isComplete ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 bg-gray-50'"
+                            >
+                                <div class="flex items-center justify-between">
+                                    <p class="font-semibold text-gray-700">{{ mission.title }}</p>
+                                    <span
+                                        class="rounded-full px-2 py-1 text-xs font-semibold"
+                                        :class="mission.isComplete ? 'bg-emerald-200 text-emerald-700' : 'bg-gray-200 text-gray-600'"
+                                    >
+                                        {{ mission.isComplete ? 'Completada' : 'Pendiente' }}
+                                    </span>
+                                </div>
+                                <p class="mt-1 text-xs text-gray-500">{{ mission.description }}</p>
+                                <p class="mt-2 text-xs text-emerald-600">
+                                    Recompensa: {{ mission.coinReward }} monedas, {{ mission.xpReward }} XP
+                                </p>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="rounded-lg bg-white/85 p-4 shadow-sm">
+                        <h2 class="text-lg font-semibold text-gray-800">Registro de eventos</h2>
+                        <p class="text-sm text-gray-600">
+                            Sigue los cambios de estaciones, plagas y recompensas en tu granja.
+                        </p>
+                        <ul class="mt-4 space-y-2 text-xs text-gray-600">
+                            <li v-for="log in eventLog" :key="log" class="rounded bg-gray-50 px-2 py-1">
+                                {{ log }}
+                            </li>
+                        </ul>
+                    </div>
+                </aside>
             </div>
         </main>
     </div>
 </template>
 
 <style scoped>
-/* Estilos adicionales si son necesarios */
+.animate-pulse {
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+    100% {
+        opacity: 1;
+    }
+}
 </style>
+

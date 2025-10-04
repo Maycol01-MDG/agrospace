@@ -101,7 +101,6 @@
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { nextTick, onMounted, reactive, ref } from 'vue';
-// @ts-ignore
 import 'leaflet-geometryutil';
 
 // Fix para los iconos de Leaflet

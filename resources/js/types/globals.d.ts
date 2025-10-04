@@ -31,3 +31,5 @@ declare global {
         google: any;
     }
 }
+
+declare module 'leaflet-geometryutil';

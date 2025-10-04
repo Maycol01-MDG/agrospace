@@ -22,6 +22,10 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'land_area_coordinates',
+        'land_area_size',
+        'land_area_name',
+        'land_area_description',
     ];
 
     /**
@@ -44,6 +48,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'land_area_coordinates' => 'array',
         ];
     }
 }

@@ -6,6 +6,7 @@ import { Form } from '@inertiajs/vue3';
 import RegisteredUserController from '@/actions/App/Http/Controllers/Auth/RegisteredUserController';
 import AuthenticatedSessionController from '@/actions/App/Http/Controllers/Auth/AuthenticatedSessionController';
 import InputError from '@/components/InputError.vue';
+import LandAreaSelector from '@/components/LandAreaSelector.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -13,6 +14,7 @@ import { LoaderCircle, X } from 'lucide-vue-next';
 
 const showLoginForm = ref(false);
 const showRegisterForm = ref(false);
+const landAreaSelectorRef = ref(null);
 
 const openLoginForm = () => {
     showRegisterForm.value = false;
@@ -27,6 +29,24 @@ const openRegisterForm = () => {
 const closeForms = () => {
     showLoginForm.value = false;
     showRegisterForm.value = false;
+};
+
+const clearArea = () => {
+    if (landAreaSelectorRef.value) {
+        landAreaSelectorRef.value.clearArea();
+    }
+};
+
+const calculateArea = () => {
+    if (landAreaSelectorRef.value) {
+        landAreaSelectorRef.value.calculateArea();
+    }
+};
+
+const handleImageError = (event) => {
+    console.error('Error loading image:', event);
+    // Fallback: usar un color de fondo si la imagen no carga
+    event.target.parentElement.style.backgroundColor = '#1f2937';
 };
 </script>
 
@@ -520,9 +540,10 @@ const closeForms = () => {
         <!-- Formulario de Login (Izquierda) -->
         <div 
             v-if="showLoginForm"
-            class="fixed inset-0 z-50 flex items-center justify-start bg-black bg-opacity-50"
+            class="fixed inset-0 z-50 flex"
             @click="closeForms"
         >
+            <!-- Formulario de Login (Izquierda) -->
             <div 
                 class="animate-slide-in-left bg-gradient-to-br from-green-50 to-green-100 p-8 shadow-2xl w-full max-w-md h-full overflow-y-auto"
                 @click.stop
@@ -606,16 +627,133 @@ const closeForms = () => {
                     </p>
                 </div>
             </div>
+            
+            <!-- Imagen de Cajamarca (Derecha) -->
+            <div 
+                class="flex-1 h-full bg-cover bg-center bg-no-repeat relative"
+                @click.stop
+            >
+                <img 
+                    src="http://127.0.0.1:8000/img/cajamarca.jpg" 
+                    alt="Cajamarca landscape"
+                    class="absolute inset-0 w-full h-full object-cover"
+                    @error="handleImageError"
+                />
+                <div class="h-full bg-black bg-opacity-60 flex items-center justify-center">
+                    <div class="text-center text-white p-8">
+                        <h3 class="font-fredoka text-4xl font-bold mb-4 drop-shadow-lg">
+                            Bienvenido a AgroSpace
+                        </h3>
+                        <p class="font-fredoka text-xl drop-shadow-md">
+                            Cultiva tus sueños en las tierras de Cajamarca
+                        </p>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Formulario de Registro (Derecha) -->
         <div 
             v-if="showRegisterForm"
-            class="fixed inset-0 z-50 flex items-center justify-end bg-black bg-opacity-50"
+            class="fixed inset-0 z-50 flex bg-black bg-opacity-50"
             @click="closeForms"
         >
+            <!-- Mapa de selección de área (Izquierda - 3/4) -->
+            <div class="w-3/4 h-full relative" @click.stop>
+                <div class="h-full bg-gradient-to-br from-green-50 to-emerald-100 p-6">
+                    <div class="h-full flex flex-col">
+                        <h3 class="font-fredoka text-2xl font-bold text-green-800 mb-4">
+                            Selecciona tu Terreno
+                        </h3>
+                        <!-- Sección superior con texto, campos y botones -->
+                        <div class="mb-4 space-y-4">
+                            <div class="flex items-center justify-between">
+                                <p class="font-fredoka text-green-700 text-sm">
+                                    Marca en el mapa el área donde establecerás tu granja
+                                </p>
+                                <div class="flex gap-3">
+                                    <button
+                                        @click="clearArea"
+                                        type="button"
+                                        class="font-fredoka flex items-center gap-2 rounded-xl bg-gradient-to-r from-red-500 to-red-600 px-4 py-2 text-white shadow-lg transition-all duration-300 hover:scale-105 hover:from-red-600 hover:to-red-700"
+                                    >
+                                        <svg
+                                            class="h-4 w-4"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24"
+                                        >
+                                            <path
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                                stroke-width="2"
+                                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                            ></path>
+                                        </svg>
+                                        Limpiar área
+                                    </button>
+                                    <button
+                                        @click="calculateArea"
+                                        type="button"
+                                        class="font-fredoka flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 px-4 py-2 text-white shadow-lg transition-all duration-300 hover:scale-105 hover:from-blue-600 hover:to-blue-700"
+                                    >
+                                        <svg
+                                            class="h-4 w-4"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24"
+                                        >
+                                            <path
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                                stroke-width="2"
+                                                d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"
+                                            ></path>
+                                        </svg>
+                                        Calcular área
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <!-- Campos de nombre y descripción en la parte superior -->
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <Label for="land_area_name" class="font-fredoka text-green-800 font-semibold">
+                                        Nombre del área
+                                    </Label>
+                                    <Input
+                                        id="land_area_name"
+                                        type="text"
+                                        class="mt-1 font-fredoka"
+                                        placeholder="Ej: Parcela Norte"
+                                    />
+                                </div>
+                                
+                                <div>
+                                    <Label for="land_area_description" class="font-fredoka text-green-800 font-semibold">
+                                        Descripción
+                                    </Label>
+                                    <Input
+                                        id="land_area_description"
+                                        type="text"
+                                        class="mt-1 font-fredoka"
+                                        placeholder="Describe las características..."
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex-1 flex flex-col">
+                            <div class="flex-1">
+                                <LandAreaSelector ref="landAreaSelectorRef" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Formulario de registro (Derecha - 1/4) -->
             <div 
-                class="animate-slide-in-right bg-gradient-to-br from-amber-50 to-orange-100 p-8 shadow-2xl w-full max-w-md h-full overflow-y-auto"
+                class="w-1/4 bg-gradient-to-br from-amber-50 to-orange-100 p-6 shadow-2xl h-full overflow-y-auto"
                 @click.stop
             >
                 <div class="flex items-center justify-between mb-6">
@@ -708,6 +846,18 @@ const closeForms = () => {
                         />
                         <InputError :message="errors.password_confirmation" class="mt-1" />
                     </div>
+
+                    <!-- Campos ocultos para el área de terreno -->
+                    <input type="hidden" name="land_area_coordinates" />
+                    <input type="hidden" name="land_area_size" />
+                    <input type="hidden" name="land_area_name" />
+                    <input type="hidden" name="land_area_description" />
+                    
+                    <!-- Errores de validación para campos de área -->
+                    <InputError :message="errors.land_area_coordinates" />
+                    <InputError :message="errors.land_area_size" />
+                    <InputError :message="errors.land_area_name" />
+                    <InputError :message="errors.land_area_description" />
 
                     <Button
                         type="submit"

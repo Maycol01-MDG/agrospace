@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import RegisteredUserController from '@/actions/App/Http/Controllers/Auth/RegisteredUserController';
 import InputError from '@/components/InputError.vue';
+import LandAreaSelector from '@/components/LandAreaSelector.vue';
 import TextLink from '@/components/TextLink.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -80,6 +81,15 @@ import { LoaderCircle } from 'lucide-vue-next';
                         placeholder="Confirm password"
                     />
                     <InputError :message="errors.password_confirmation" />
+                </div>
+
+                <!-- Selector de área de terreno -->
+                <div class="grid gap-2">
+                    <LandAreaSelector />
+                    <InputError :message="errors.land_area_coordinates" />
+                    <InputError :message="errors.land_area_size" />
+                    <InputError :message="errors.land_area_name" />
+                    <InputError :message="errors.land_area_description" />
                 </div>
 
                 <Button

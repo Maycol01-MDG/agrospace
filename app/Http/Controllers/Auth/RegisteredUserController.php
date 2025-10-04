@@ -34,12 +34,20 @@ class RegisteredUserController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|string|lowercase|email|max:255|unique:'.User::class,
             'password' => ['required', 'confirmed', Rules\Password::defaults()],
+            'land_area_coordinates' => 'nullable|json',
+            'land_area_size' => 'nullable|numeric|min:0',
+            'land_area_name' => 'nullable|string|max:255',
+            'land_area_description' => 'nullable|string|max:1000',
         ]);
 
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
+            'land_area_coordinates' => $request->land_area_coordinates,
+            'land_area_size' => $request->land_area_size,
+            'land_area_name' => $request->land_area_name,
+            'land_area_description' => $request->land_area_description,
         ]);
 
         event(new Registered($user));

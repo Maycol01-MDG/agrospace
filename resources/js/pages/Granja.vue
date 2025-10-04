@@ -17,7 +17,7 @@ const gameMode = ref<'explore' | 'plant'>('explore');
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
 let renderer: THREE.WebGLRenderer;
-let terrainTiles: THREE.Mesh[] = []; // Array de cuadros del terreno
+const terrainTiles: THREE.Mesh[] = []; // Array de cuadros del terreno
 let raycaster: THREE.Raycaster;
 let mouse: THREE.Vector2;
 let textureLoader: THREE.TextureLoader;

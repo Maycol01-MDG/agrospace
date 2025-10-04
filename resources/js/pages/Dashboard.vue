@@ -1,10 +1,167 @@
 <script setup lang="ts">
 import { Head, Link, router } from '@inertiajs/vue3';
 import { LogOut, User } from 'lucide-vue-next';
+import { nextTick, ref, shallowRef } from 'vue';
 
 // Función para cerrar sesión
 const logout = () => {
     router.post('/logout');
+};
+
+const showFarmMap = ref(false);
+const isMapLoading = ref(false);
+const mapError = ref<string | null>(null);
+const mapContainerRef = ref<HTMLDivElement | null>(null);
+const mapInstance = shallowRef<any>(null);
+const polygonInstance = shallowRef<any>(null);
+let googleMapsPromise: Promise<any> | null = null;
+
+const farmlandPolygon = [
+    { lat: 20.706658, lng: -103.411528 },
+    { lat: 20.706447, lng: -103.4059 },
+    { lat: 20.702294, lng: -103.405838 },
+    { lat: 20.701998, lng: -103.411454 },
+];
+
+const computePolygonCenter = () => {
+    const pointsCount = farmlandPolygon.length;
+
+    if (pointsCount === 0) {
+        return { lat: 0, lng: 0 };
+    }
+
+    return farmlandPolygon.reduce(
+        (accumulator, point) => ({
+            lat: accumulator.lat + point.lat / pointsCount,
+            lng: accumulator.lng + point.lng / pointsCount,
+        }),
+        { lat: 0, lng: 0 },
+    );
+};
+
+const loadGoogleMaps = () => {
+    if (googleMapsPromise) {
+        return googleMapsPromise;
+    }
+
+    googleMapsPromise = new Promise((resolve, reject) => {
+        const existingGoogle = window.google;
+
+        if (existingGoogle?.maps) {
+            resolve(existingGoogle);
+            return;
+        }
+
+        const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+        if (!apiKey) {
+            reject(
+                new Error(
+                    'Falta configurar la variable VITE_GOOGLE_MAPS_API_KEY para cargar el mapa.',
+                ),
+            );
+            return;
+        }
+        const handleLoad = () => {
+            const loadedGoogle = window.google;
+
+            if (loadedGoogle?.maps) {
+                resolve(loadedGoogle);
+            } else {
+                reject(new Error('Google Maps no está disponible en este momento.'));
+            }
+        };
+
+        const handleError = () => {
+            reject(new Error('No fue posible cargar Google Maps.'));
+        };
+
+        const existingScript = document.getElementById(
+            'google-maps-script',
+        ) as HTMLScriptElement | null;
+
+        if (existingScript) {
+            existingScript.addEventListener('load', handleLoad, { once: true });
+            existingScript.addEventListener('error', handleError, { once: true });
+            return;
+        }
+
+        const script = document.createElement('script');
+        script.id = 'google-maps-script';
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}`;
+        script.async = true;
+        script.defer = true;
+        script.addEventListener('load', handleLoad, { once: true });
+        script.addEventListener('error', handleError, { once: true });
+
+        document.head.appendChild(script);
+    });
+
+    return googleMapsPromise;
+};
+
+const initialiseFarmMap = async () => {
+    if (!mapContainerRef.value) {
+        return;
+    }
+
+    mapError.value = null;
+    isMapLoading.value = true;
+
+    try {
+        const google = await loadGoogleMaps();
+        const center = computePolygonCenter();
+
+        if (!mapInstance.value) {
+            mapInstance.value = new google.maps.Map(mapContainerRef.value, {
+                center,
+                zoom: 16,
+                mapTypeId: 'satellite',
+            });
+        } else {
+            mapInstance.value.setCenter(center);
+            mapInstance.value.setZoom(16);
+        }
+
+        if (polygonInstance.value) {
+            polygonInstance.value.setMap(null);
+        }
+
+        polygonInstance.value = new google.maps.Polygon({
+            paths: farmlandPolygon,
+            strokeColor: '#16a34a',
+            strokeOpacity: 0.9,
+            strokeWeight: 2,
+            fillColor: '#22c55e',
+            fillOpacity: 0.35,
+        });
+
+        polygonInstance.value.setMap(mapInstance.value);
+
+        const infoWindow = new google.maps.InfoWindow({
+            content: '<strong>Campo Principal</strong><br/>Área delimitada lista para sembrar.',
+            position: farmlandPolygon[0],
+        });
+
+        infoWindow.open({ map: mapInstance.value });
+    } catch (error) {
+        mapError.value =
+            error instanceof Error
+                ? error.message
+                : 'Ocurrió un error inesperado al cargar el mapa.';
+    } finally {
+        isMapLoading.value = false;
+    }
+};
+
+const openFarmMap = async () => {
+    showFarmMap.value = true;
+    await nextTick();
+    await initialiseFarmMap();
+};
+
+const closeFarmMap = () => {
+    showFarmMap.value = false;
 };
 </script>
 
@@ -150,20 +307,104 @@ const logout = () => {
                             agrícola en tiempo real.
                         </p>
 
-                        <div
-                            class="rounded-xl bg-white/50 p-4 backdrop-blur-sm"
+                        <button
+                            type="button"
+                            @click.stop="openFarmMap"
+                            class="rounded-xl bg-white/70 p-4 text-center font-fredoka text-sm font-semibold text-green-700 shadow-sm transition hover:bg-white"
                         >
-                            <p
-                                class="font-fredoka text-sm font-semibold text-green-600"
-                            >
-                                🌱 ¡Comienza tu aventura agrícola ahora!
-                            </p>
-                        </div>
+                            🌱 ¡Comienza tu aventura agrícola ahora!
+                        </button>
                     </div>
                 </div>
             </div>
         </main>
     </div>
+
+    <transition name="fade">
+        <div
+            v-if="showFarmMap"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-10"
+            @click="closeFarmMap"
+        >
+            <div
+                class="relative w-full max-w-4xl rounded-2xl bg-white p-6 shadow-2xl"
+                @click.stop
+            >
+                <button
+                    type="button"
+                    class="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-gray-600 transition hover:bg-gray-200"
+                    @click="closeFarmMap"
+                    aria-label="Cerrar mapa de la granja"
+                >
+                    <span class="text-xl">×</span>
+                </button>
+
+                <h3 class="font-fredoka text-2xl font-semibold text-green-800">
+                    Mapa de tu Modo Granja
+                </h3>
+                <p class="mt-2 text-sm text-gray-600">
+                    Visualiza la parcela delimitada en Google Maps para planificar tus cultivos con precisión.
+                </p>
+
+                <div
+                    class="relative mt-6 h-[420px] overflow-hidden rounded-xl border border-green-200"
+                >
+                    <div
+                        ref="mapContainerRef"
+                        class="h-full w-full"
+                    />
+
+                    <div
+                        v-if="isMapLoading"
+                        class="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/70 text-green-700"
+                    >
+                        <svg
+                            class="h-8 w-8 animate-spin"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <circle
+                                class="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                stroke-width="4"
+                            ></circle>
+                            <path
+                                class="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                            ></path>
+                        </svg>
+                    </div>
+
+                    <div
+                        v-if="mapError"
+                        class="absolute inset-0 flex items-center justify-center bg-white/90 p-6 text-center text-sm text-red-600"
+                    >
+                        {{ mapError }}
+                    </div>
+                </div>
+
+                <div class="mt-4 rounded-xl bg-green-50 p-4 text-sm text-green-800">
+                    <p class="font-semibold">Sugerencias de uso:</p>
+                    <ul class="mt-2 list-disc space-y-1 pl-5">
+                        <li>
+                            Utiliza el mapa satelital para identificar las áreas óptimas de siembra dentro del polígono.
+                        </li>
+                        <li>
+                            Ajusta la figura desde Google Maps para personalizar tus parcelas y compartirlas con tu equipo.
+                        </li>
+                        <li>
+                            Configura la clave <code class="rounded bg-white px-1">VITE_GOOGLE_MAPS_API_KEY</code> para habilitar la edición en vivo del mapa.
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </transition>
 </template>
 
 <style scoped>
@@ -171,5 +412,15 @@ const logout = () => {
 
 .font-fredoka {
     font-family: 'Fredoka', sans-serif;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+    transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+    opacity: 0;
 }
 </style>

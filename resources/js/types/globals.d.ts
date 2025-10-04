@@ -4,6 +4,7 @@ import { AppPageProps } from '@/types/index';
 declare module 'vite/client' {
     interface ImportMetaEnv {
         readonly VITE_APP_NAME: string;
+        readonly VITE_GOOGLE_MAPS_API_KEY?: string;
         [key: string]: string | boolean | undefined;
     }
 
@@ -22,5 +23,11 @@ declare module 'vue' {
         $inertia: typeof Router;
         $page: Page;
         $headManager: ReturnType<typeof createHeadManager>;
+    }
+}
+
+declare global {
+    interface Window {
+        google: any;
     }
 }

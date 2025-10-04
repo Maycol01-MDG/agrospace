@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Registro de Apuestas (con caché del navegador)</title>
+  <style>
+    :root{
+      --bg:#0b0e11; --card:#12171d; --muted:#9aa3af; --accent:#35b67f; --danger:#ef4444; --border:#1f2937; --text:#e5e7eb;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial; background:var(--bg); color:var(--text)}
+    header{padding:20px 16px; border-bottom:1px solid var(--border); position:sticky; top:0; background:linear-gradient(180deg, rgba(11,14,17,.95), rgba(11,14,17,.85)); backdrop-filter: blur(8px)}
+    h1{font-size:20px; margin:0 0 6px}
+    p{margin:0; color:var(--muted); font-size:13px}
+    .wrap{max-width:1100px; margin:18px auto; padding:0 16px}
+    .card{background:var(--card); border:1px solid var(--border); border-radius:14px; overflow:hidden}
+    .toolbar{display:flex; flex-wrap:wrap; gap:8px; padding:12px; border-bottom:1px solid var(--border); align-items:center}
+    button{appearance:none; border:1px solid var(--border); background:#0f141a; color:var(--text); padding:8px 12px; border-radius:10px; cursor:pointer; font-weight:600}
+    button:hover{filter:brightness(1.1)}
+    button.accent{border-color:#1e8247; background:#0d1a14}
+    button.danger{border-color:#7f1d1d; background:#1a0f0f; color:#fecaca}
+    table{width:100%; border-collapse:collapse}
+    thead th{background:#0f141a; color:#cbd5e1; text-align:left; font-size:12px; letter-spacing:.02em; border-bottom:1px solid var(--border); padding:10px}
+    tbody td{border-bottom:1px dashed var(--border); padding:8px}
+    tfoot td{padding:12px 10px; border-top:1px solid var(--border); font-weight:700}
+    input, select{width:100%; background:#0b1117; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px; font:inherit}
+    input[readonly]{background:#0b1117; color:#cbd5e1}
+    .right{text-align:right}
+    .muted{color:var(--muted)}
+    .row-actions{display:flex; gap:8px; justify-content:flex-end}
+    .totalPositive{color:var(--accent)}
+    .totalNegative{color:var(--danger)}
+    .badge{display:inline-block; padding:2px 8px; border-radius:999px; background:#0f141a; border:1px solid var(--border); font-size:12px; margin-left:10px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Registro de Apuestas</h1>
+    <p>Se guarda automáticamente en el caché del navegador (localStorage). <span class="badge" id="autosaveState">Guardado</span></p>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="toolbar">
+        <button class="accent" id="addRowBtn">+ Añadir fila</button>
+        <button id="exportBtn">Exportar JSON</button>
+        <button id="importBtn">Importar JSON</button>
+        <input type="file" id="fileInput" accept="application/json" style="display:none" />
+        <div style="flex:1"></div>
+        <button class="danger" id="clearBtn">🧹 Limpiar todo</button>
+      </div>
+
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th style="min-width:220px">EVENTO</th>
+              <th class="right" style="min-width:140px">MONTO APOSTADO</th>
+              <th class="right" style="min-width:140px">GANADO O CASH</th>
+              <th style="min-width:110px">SALIO</th>
+              <th class="right" style="min-width:120px">SALDO</th>
+              <th class="right" style="min-width:120px">TOTAL</th>
+              <th style="min-width:120px">ACCIONES</th>
+            </tr>
+          </thead>
+          <tbody id="body"></tbody>
+          <tfoot>
+            <tr>
+              <td colspan="4" class="right">Suma total</td>
+              <td class="right" id="sumSaldo">0</td>
+              <td class="right" id="sumTotal">0</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div style="padding:12px" class="muted">Regla de cálculo: si <strong>SALIO = "sí"</strong>, <em>SALDO = (GANADO O CASH − MONTO APOSTADO)</em>. Si <strong>SALIO = "no"</strong>, <em>SALDO = − MONTO APOSTADO</em>. La columna <strong>TOTAL</strong> muestra el acumulado global hasta esa fila.</div>
+    </div>
+  </div>
+
+  <script>
+    const KEY = 'apuestasCacheV1';
+
+    const $ = s => document.querySelector(s);
+    const body = $('#body');
+    const autosaveState = $('#autosaveState');
+
+    function fmt(n){
+      if(Number.isNaN(n)) return '';
+      return new Intl.NumberFormat('es-ES',{maximumFractionDigits:2}).format(n);
+    }
+    function parse(n){
+      const v = typeof n === 'string' ? n.replace(/\s/g,'').replace(',', '.') : n;
+      const num = parseFloat(v);
+      return Number.isFinite(num) ? num : 0;
+    }
+
+    function templateRow(row={evento:'', monto:'', ganado:'', salio:'sí'}){
+      return {
+        evento: row.evento ?? '',
+        monto: row.monto ?? '',
+        ganado: row.ganado ?? '',
+        salio: (row.salio ?? 'sí').toLowerCase() === 'no' ? 'no' : 'sí'
+      };
+    }
+
+    function rowHTML(i, row){
+      const id = `r${i}`;
+      return `<tr data-i="${i}">
+        <td><input type="text" value="${escapeHtml(row.evento)}" data-k="evento" placeholder="Ej: Madrid primer tiempo" /></td>
+        <td class="right"><input type="number" inputmode="decimal" step="any" value="${row.monto}" data-k="monto" placeholder="0" /></td>
+        <td class="right"><input type="number" inputmode="decimal" step="any" value="${row.ganado}" data-k="ganado" placeholder="0" /></td>
+        <td>
+          <select data-k="salio">
+            <option value="sí" ${row.salio==='sí'?'selected':''}>sí</option>
+            <option value="no" ${row.salio==='no'?'selected':''}>no</option>
+          </select>
+        </td>
+        <td class="right saldo" id="${id}-saldo"></td>
+        <td class="right total" id="${id}-total"></td>
+        <td class="row-actions">
+          <button data-action="up">↑</button>
+          <button data-action="down">↓</button>
+          <button class="danger" data-action="del">Eliminar</button>
+        </td>
+      </tr>`;
+    }
+
+    function escapeHtml(s){
+      return (s+"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+    }
+
+    function compute(rows){
+      let running = 0;
+      const out = rows.map(r=>{
+        const monto = parse(r.monto);
+        const ganado = parse(r.ganado);
+        const saldo = r.salio==='sí' ? (ganado - monto) : (0 - monto);
+        running += saldo;
+        return {saldo, total: running};
+      });
+      return out;
+    }
+
+    function render(){
+      const rows = getRows();
+      body.innerHTML = rows.map((r,i)=>rowHTML(i,r)).join('');
+      attachRowListeners();
+      updateTotals();
+    }
+
+    function getRows(){
+      const raw = localStorage.getItem(KEY);
+      try{
+        const parsed = raw ? JSON.parse(raw) : null;
+        if(Array.isArray(parsed) && parsed.length){
+          return parsed.map(templateRow);
+        }
+      }catch(e){/* ignore */}
+      // default with one example row
+      return [templateRow({evento:'Madrid primer tiempo', monto:30, ganado:50, salio:'sí'})];
+    }
+
+    function saveRows(rows){
+      localStorage.setItem(KEY, JSON.stringify(rows));
+      autosaveBlink();
+    }
+
+    function autosaveBlink(){
+      autosaveState.textContent = 'Guardado';
+      autosaveState.style.background = '#0d1a14';
+      setTimeout(()=>{
+        autosaveState.textContent = 'Auto';
+        autosaveState.style.background = '#0f141a';
+      }, 1200);
+    }
+
+    function collectRowsFromDOM(){
+      const rows = [];
+      body.querySelectorAll('tr').forEach(tr=>{
+        const obj = {};
+        tr.querySelectorAll('input,select').forEach(inp=>{
+          obj[inp.dataset.k] = inp.value;
+        });
+        rows.push(templateRow(obj));
+      });
+      return rows;
+    }
+
+    function updateTotals(){
+      const rows = collectRowsFromDOM();
+      const calc = compute(rows);
+      let sumSaldo = 0; let sumTotal = 0;
+      rows.forEach((r, i)=>{
+        const s = calc[i].saldo; const t = calc[i].total;
+        sumSaldo += s; sumTotal = t;
+        const saldoCell = document.getElementById(`r${i}-saldo`);
+        const totalCell = document.getElementById(`r${i}-total`);
+        if(saldoCell) saldoCell.textContent = (s>=0?'+':'') + fmt(s);
+        if(totalCell){
+          totalCell.textContent = (t>=0?'+':'') + fmt(t);
+          totalCell.className = 'right total ' + (t>=0? 'totalPositive' : 'totalNegative');
+        }
+      });
+      document.getElementById('sumSaldo').textContent = (sumSaldo>=0?'+':'') + fmt(sumSaldo);
+      const sumT = document.getElementById('sumTotal');
+      sumT.textContent = (sumTotal>=0?'+':'') + fmt(sumTotal);
+      sumT.className = 'right ' + (sumTotal>=0? 'totalPositive' : 'totalNegative');
+      saveRows(rows);
+    }
+
+    function addRow(atIndex){
+      const rows = collectRowsFromDOM();
+      const i = Number.isInteger(atIndex) ? atIndex : rows.length;
+      rows.splice(i+1, 0, templateRow({}));
+      saveRows(rows);
+      render();
+    }
+
+    function deleteRow(i){
+      const rows = collectRowsFromDOM();
+      rows.splice(i,1);
+      saveRows(rows.length?rows:[templateRow({})]);
+      render();
+    }
+
+    function moveRow(i, dir){
+      const rows = collectRowsFromDOM();
+      const j = i + dir;
+      if(j<0||j>=rows.length) return;
+      const tmp = rows[i];
+      rows[i] = rows[j]; rows[j] = tmp;
+      saveRows(rows); render();
+    }
+
+    function attachRowListeners(){
+      body.querySelectorAll('input, select').forEach(el=>{
+        el.addEventListener('input', updateTotals);
+        el.addEventListener('change', updateTotals);
+      });
+      body.querySelectorAll('tr').forEach((tr, idx)=>{
+        tr.addEventListener('click', (e)=>{
+          const btn = e.target.closest('button');
+          if(!btn) return;
+          const act = btn.dataset.action;
+          if(act==='del') deleteRow(idx);
+          if(act==='up') moveRow(idx, -1);
+          if(act==='down') moveRow(idx, +1);
+        });
+      });
+    }
+
+    // toolbar actions
+    document.getElementById('addRowBtn').addEventListener('click', ()=> addRow());
+
+    document.getElementById('clearBtn').addEventListener('click', ()=>{
+      if(confirm('¿Borrar todos los datos guardados y reiniciar la tabla?')){
+        localStorage.removeItem(KEY);
+        render();
+      }
+    });
+
+    // export/import JSON
+    document.getElementById('exportBtn').addEventListener('click', ()=>{
+      const rows = collectRowsFromDOM();
+      const blob = new Blob([JSON.stringify(rows, null, 2)], {type:'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'apuestas.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    document.getElementById('importBtn').addEventListener('click', ()=>{
+      document.getElementById('fileInput').click();
+    });
+    document.getElementById('fileInput').addEventListener('change', (e)=>{
+      const file = e.target.files?.[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try{
+          const data = JSON.parse(reader.result);
+          if(Array.isArray(data)){
+            saveRows(data.map(templateRow));
+            render();
+          }else{
+            alert('El archivo no contiene un arreglo válido.');
+          }
+        }catch(err){
+          alert('No se pudo leer el JSON.');
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = '';
+    });
+
+    // init
+    render();
+  </script>
+</body>
+</html>

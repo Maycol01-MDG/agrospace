@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { login, register } from '@/routes';
-import { Head, Link } from '@inertiajs/vue3';
+import { Head } from '@inertiajs/vue3';
 import { ref } from 'vue';
 import { Form } from '@inertiajs/vue3';
 import RegisteredUserController from '@/actions/App/Http/Controllers/Auth/RegisteredUserController';

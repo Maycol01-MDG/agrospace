@@ -12,7 +12,7 @@ Route::get('dashboard', function () {
 })->middleware(['auth', 'verified'])->name('dashboard');
 
 Route::get('granja', function () {
-    return Inertia::render('Granja');
+    return Inertia::render('FarmSimulator');
 })->middleware(['auth', 'verified'])->name('granja');
 
 require __DIR__ . '/settings.php';

@@ -388,6 +388,22 @@ const closeFarmMap = () => {
                     </div>
                 </div>
 
+                <div class="mt-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-900">
+                    <p class="font-semibold">Indicaciones iniciales:</p>
+                    <ol class="mt-2 list-decimal space-y-1 pl-5">
+                        <li>Selecciona el área de tu terreno directamente en el mapa.</li>
+                        <li>
+                            Crea un mapa para el modo <strong>Jugar Modo Granja</strong>. Construye
+                            y administra tu propia granja: siembra cultivos, cuida animales y expande tu
+                            imperio agrícola en tiempo real.
+                        </li>
+                        <li>
+                            Planifica tus cultivos considerando la humedad del aire, el tipo de suelo y otros
+                            factores ambientales clave.
+                        </li>
+                    </ol>
+                </div>
+
                 <div class="mt-4 rounded-xl bg-green-50 p-4 text-sm text-green-800">
                     <p class="font-semibold">Sugerencias de uso:</p>
                     <ul class="mt-2 list-disc space-y-1 pl-5">
